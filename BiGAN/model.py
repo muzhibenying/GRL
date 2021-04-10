@@ -108,11 +108,15 @@ class Encoder(torch.nn.Module):
             node_size, hidden_size, num_heads = 3,
             allow_zero_in_degree = True 
         ))
-        for __ in range(num_layers - 1):
+        for __ in range(num_layers - 2):
             self.layers.append(dgl.nn.pytorch.conv.GATConv(
                 hidden_size, hidden_size, num_heads = 3,
                 allow_zero_in_degree = True
             ))
+        self.layers.append(dgl.nn.pytorch.conv.GATConv(
+            hidden_size, out_size, num_heads = 3,
+            allow_zero_in_degree = True
+        ))
     
     def forward(self, g, h):
         h_1 = torch.mean(self.layers[0](g, h), dim = 1)
@@ -141,8 +145,8 @@ class Discriminator(torch.nn.Module):
     def forward(self, g, h, z):
         h_d = torch.mean(self.gat_layer(g, h), dim = 1)
         g.ndata["h_d"] = h_d
-        z = self.linear1(z)
-        h_d = dgl.mean_nodes(g, "h_d")
-        h_d = torch.cat([h_d, z], dim = 1)
-        score = torch.sigmoid(self.linear2(h_d))
+        z_1 = self.linear1(z)
+        h_d_2= dgl.mean_nodes(g, "h_d")
+        h_d_3 = torch.cat([h_d_2, z_1], dim = 1)
+        score = torch.sigmoid(self.linear2(h_d_3))
         return score

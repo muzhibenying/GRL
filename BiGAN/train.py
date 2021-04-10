@@ -1,23 +1,107 @@
 import argparse
 import dgl
 import model
+import torch
 
 def  create_data_loader(opt):
     dataset = dgl.data.TUDataset(opt.dataset)
     dataset_info = {}
     dataset_info["num_nodes"] = dataset.max_num_node
     data_loader = dgl.dataloading.GraphDataLoader(dataset)
-    for graph, label in data_loader:
-        print(graph)
+    max_in_degrees = 0
+    max_node_labels = 0
+    for graph, label in dataset:
+        if "feat" not in graph.ndata.keys():
+            in_degree = max(graph.in_degrees())
+            node_label = max(graph.ndata["node_labels"])
+            if in_degree >= max_in_degrees:
+                max_in_degrees = int(in_degree)
+            if node_label >= max_node_labels:
+                max_node_labels = int(node_label)
+    for graph, label in dataset:
+        if "feat" not in graph.ndata.keys():
+            graph.ndata["h"] = torch.cat([
+                torch.nn.functional.one_hot(graph.in_degrees(), num_classes = max_in_degrees + 1),
+                torch.nn.functional.one_hot(graph.ndata["node_labels"].type(torch.LongTensor),\
+                                                                                    num_classes = max_node_labels + 1)
+            ], dim = 1).type(torch.FloatTensor)
+        else:
+            graph.ndata["h"] = graph.ndata["feat"]
+        if "w" not in graph.edata.keys() and "edge_labels" not in graph.edata.keys():
+            graph.edata["w"] = torch.ones(graph.num_edges())
+        elif "edge_labels" in graph.edata.keys():
+            graph.edata["w"] = graph.edata["edge_labels"]
+    dataset_info["node_feature_size"] = dataset[0][0].ndata["h"].size()[1]
+    return data_loader, dataset_info
 
 def main():
+    torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required = True, help = "give the name of a graph dataset")
     parser.add_argument("--device", default = "cpu", help = "use gpu or cpu to run the program")
+    parser.add_argument("--lr", default = 1e-4, help = "learning rate")
+    parser.add_argument("--num_epochs", default = 100, help = "the number of epochs to train the BiGAN")
     opt = parser.parse_args()
     print(opt)
 
-    create_data_loader(opt)
+    data_loader, dataset_info = create_data_loader(opt)
+    
+    generator = model.Generator(max_nodes = dataset_info["num_nodes"], 
+                                                    node_size = dataset_info["node_feature_size"],
+                                                    graph_size = dataset_info["node_feature_size"]).to(opt.device)
+    encoder = model.Encoder(node_size = dataset_info["node_feature_size"],
+                                               hidden_size = 512, out_size = dataset_info["node_feature_size"],
+                                               num_layers = 2).to(opt.device)
+    discriminator = model.Discriminator(node_size = dataset_info["node_feature_size"],
+                                                                 hidden_size = 512, 
+                                                                 out_size = dataset_info["node_feature_size"])
+    optimizerG = torch.optim.Adam([{"params": encoder.parameters()},
+                                    {"params": generator.parameters()}], lr = opt.lr, betas = (0.5, 0.999))
+    optimizerD = torch.optim.Adam(discriminator.parameters(), lr = opt.lr, betas = (0.5, 0.999))
+    critierion = torch.nn.BCELoss()
 
+    for epoch in range(opt.num_epochs):
+        
+        for i, (data, label) in enumerate(data_loader):
+            real_label = torch.tensor([[1.]])
+            fake_label = torch.tensor([[0.]])
+            
+            d_real = data.to(opt.device)
+
+            z_fake = torch.randn((1, dataset_info["node_feature_size"]))
+            d_fake = generator(z_fake)
+
+            z_real = encoder(d_real, d_real.ndata["h"])
+
+            mu, log_sigma = z_real[:, :dataset_info["node_feature_size"]], \
+                                        z_real[:, dataset_info["node_feature_size"] - 1:]
+            sigma = torch.exp(log_sigma)
+            epsilon = torch.randn(1, dataset_info["node_feature_size"])
+
+            output_z = mu + epsilon * sigma
+
+            output_real = discriminator(d_real, d_real.ndata["h"], z_real)
+            output_fake = discriminator(d_fake, d_fake.ndata["h"], z_fake)
+
+            loss_d = critierion(output_real, real_label) + critierion(output_fake, fake_label)
+            loss_g = critierion(output_fake, real_label) + critierion(output_real, fake_label)
+
+            if loss_g.item() < 3.5:
+                optimizerD.zero_grad()
+                loss_d.backward(retain_graph = True)
+                optimizerD.step()
+            
+            #optimizerG.zero_grad()
+            #loss_g.backward()
+            #optimizerG.step()
+
+            if i % 100 == 0:
+                print(d_fake)
+
+
+
+
+
+    
 if __name__ == "__main__":
     main()
