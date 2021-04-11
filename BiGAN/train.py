@@ -1,6 +1,8 @@
 import argparse
 import dgl
 import model
+import numpy as np
+import sklearn
 import torch
 
 def  create_data_loader(opt):
@@ -44,7 +46,11 @@ def main():
     opt = parser.parse_args()
     print(opt)
 
+    with open("results.csv", "w") as f:
+        f.write("{},{},{}\n".format("epoch", "mean accuracy", "std of accuracies"))
+
     data_loader, dataset_info = create_data_loader(opt)
+    print("dataset information\t{}".format(dataset_info))
     
     generator = model.Generator(max_nodes = dataset_info["num_nodes"], 
                                                     node_size = dataset_info["node_feature_size"],
@@ -89,19 +95,42 @@ def main():
             if loss_g.item() < 3.5:
                 optimizerD.zero_grad()
                 loss_d.backward(retain_graph = True)
-                optimizerD.step()
+                #optimizerD.step()
             
-            #optimizerG.zero_grad()
-            #loss_g.backward()
-            #optimizerG.step()
+            optimizerG.zero_grad()
+            loss_g.backward()
+            optimizerD.step()
+            optimizerG.step()
 
             if i % 100 == 0:
                 print(d_fake)
+        
+        if epoch % 1 == 0:
+            x = []
+            y = []
+            with torch.no_grad():
+                for (data, label) in data_loader:
+                    x.append(encoder(data, data.ndata["h"]).numpy())
+                    y.append(label.numpy())
+            x = np.array(x)
+            y = np.array(y)
+            params = {"C": [0.001, 0.01, 0.1, 1, 10, 100, 1000]}
+            kf = sklearn.model_selection.StratifiedKFold(n_splits = 10, 
+                                                shuffle = True, random_state = None)
+            accuracies = []
+            for train_index, test_index in kf.split(x, y):
+                x_train, x_test = x[train_index], x[test_index]
+                y_train, y_test = y[train_index], y[test_index]
+                classifier = sklearn.model_selection.GridSearchCV(
+                    sklearn.svm.LinearSVC(), params, cv = 5, scoring = "accuracy", verbose = 0
+                )
+                classifier.fit(x_train, y_train)
+                accuracies.append(sklearn.metrics.accuracy_score(
+                    y_test, classifier.predict(x_test)
+                ))
+            print(np.mean(accuracies), np.std(accuracies))
+            with open("results.csv", "a") as f:
+                f.write("{},{},{}\n".format(epoch, np.mean(accuracies), np.std(accuracies)))
 
-
-
-
-
-    
 if __name__ == "__main__":
     main()
