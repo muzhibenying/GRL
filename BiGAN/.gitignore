@@ -1,0 +1,4 @@
+*.png
+distributions/
+*.csv
+__ptcache__

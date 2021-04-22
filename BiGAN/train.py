@@ -1,11 +1,14 @@
 import argparse
+import collections
 import dgl
+import matplotlib.pyplot as plt
 import model
 import numpy as np
 import sklearn
 from sklearn import model_selection
 from sklearn import svm
 import torch
+#import tqdm
 
 def  create_data_loader(opt):
     dataset = dgl.data.TUDataset(opt.dataset)
@@ -43,7 +46,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", required = True, help = "give the name of a graph dataset")
     parser.add_argument("--device", default = "cpu", help = "use gpu or cpu to run the program")
-    parser.add_argument("--lr", default = 1e-3, help = "learning rate")
+    parser.add_argument("--lr", default = 1e-4, help = "learning rate")
     parser.add_argument("--num_epochs", default = 100, type = int, help = "the number of epochs to train the BiGAN")
     opt = parser.parse_args()
     print(opt)
@@ -72,6 +75,11 @@ def main():
 
     for epoch in range(opt.num_epochs):
         
+        num_nodes = []
+        num_edges = []
+        average_loss_d = 0
+        average_loss_g = 0
+
         for i, (data, label) in enumerate(data_loader):
             real_label = torch.tensor([[1.]])
             fake_label = torch.tensor([[0.]])
@@ -90,46 +98,54 @@ def main():
 
             output_z = mu + epsilon * sigma
 
-            output_real = discriminator(d_real, d_real.ndata["h"], z_real)
             output_fake = discriminator(d_fake, d_fake.ndata["h"], z_fake)
+            gradients = torch.autograd.grad(outputs = output_fake, inputs = (
+                 d_fake.ndata["h"]), grad_outputs = torch.ones_like(output_fake),
+                 retain_graph = True, create_graph = True, only_inputs = True)[0]
+            grdients = gradients.view(gradients.size(0), -1)
+            gradient_norm = gradients.norm(2, dim = 1)
+            gradient_penalty = ((gradient_norm - 1) ** 2).mean()
+            output_real = discriminator(d_real, d_real.ndata["h"], z_real)
+            loss_d = output_fake - output_real + 10 * gradient_penalty
+            loss_g = output_real - output_fake
 
-            loss_d = critierion(output_real, real_label) + critierion(output_fake, fake_label)
-            loss_g = critierion(output_fake, real_label) + critierion(output_real, fake_label)
-
-            """if loss_g.item() < 1.5:
-                optimizerD.zero_grad()
-                loss_d.backward(retain_graph = True)
-                #optimizerD.step()
-            
-            optimizerG.zero_grad()
-            loss_g.backward()
-            optimizerD.step()
-            optimizerG.step()"""
-            ite = 0
-            while loss_g.item() < 1.0 and ite < 5:
+            if loss_g.item() < 0:
                 optimizerD.zero_grad()
                 loss_d.backward()
                 optimizerD.step()
-                z_fake = torch.randn((1, dataset_info["node_feature_size"]))
-                d_fake = generator(z_fake)
-                z_real = encoder(d_real, d_real.ndata["h"])
-                output_real = discriminator(d_real, d_real.ndata["h"], z_real)
-                output_fake = discriminator(d_fake, d_fake.ndata["h"], z_fake)
-                loss_d = critierion(output_real, real_label) + critierion(output_fake, fake_label)
-                loss_g = critierion(output_fake, real_label) + critierion(output_real, fake_label)
-                ite += 1
+            
+            d_fake = generator(z_fake)
+            z_real = encoder(d_real, d_real.ndata["h"])
+            output_real = discriminator(d_real, d_real.ndata["h"], z_real)
+            output_fake = discriminator(d_fake, d_fake.ndata["h"], z_fake)
+            loss_d = output_fake - output_real
+            loss_g = output_real - output_fake
             optimizerG.zero_grad()
             loss_g.backward()
             optimizerG.step()
 
+            num_nodes.append(d_fake.num_nodes())
+            num_edges.append(d_fake.num_edges())
+            average_loss_d += loss_d.item()
+            average_loss_g += loss_g.item()
 
-            if i % 100 == 0:
-                with open("observation.csv", "a") as f:
-                    f.write("{},{},{},{},{}\n".format(epoch, loss_d, loss_g, d_fake.num_nodes(), 
-                                                                        d_fake.num_edges()))
+        average_loss_d = average_loss_d / len(data_loader)
+        average_loss_g = average_loss_g / len(data_loader)
+        with open("observation.csv", "a") as f:
+            f.write("{},{},{},{},{}\n".format(epoch, average_loss_d, average_loss_g,\
+                 sum(num_nodes) / len(num_nodes), sum(num_edges) / len(num_edges)))
+        nodes_counter = collections.Counter(num_nodes)
+        print("counter of  node numbers is {}".format(nodes_counter))
+        edges_counter = collections.Counter(num_edges)
+        print("counter of edge numbers is {}".format(edges_counter))
+        plt.bar(nodes_counter.keys(), nodes_counter.values())
+        plt.savefig("distributions/Distribution of number of nodes at Epoch {}.png".format(epoch))
+        plt.close()
+        plt.bar(edges_counter.keys(), edges_counter.values())
+        plt.savefig("distributions/Distribution of number of edges at Epoch {}.png".format(epoch))
+        plt.close()
 
-        
-        if epoch % 1 == 0:
+        """if epoch % 1 == 0:
             x = []
             y = []
             with torch.no_grad():
@@ -156,7 +172,7 @@ def main():
                 ))
             print(np.mean(accuracies), np.std(accuracies))
             with open("results.csv", "a") as f:
-                f.write("{},{},{}\n".format(epoch, np.mean(accuracies), np.std(accuracies)))
+                f.write("{},{},{}\n".format(epoch, np.mean(accuracies), np.std(accuracies)))"""
 
 if __name__ == "__main__":
     main()

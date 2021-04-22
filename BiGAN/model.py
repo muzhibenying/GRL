@@ -148,5 +148,6 @@ class Discriminator(torch.nn.Module):
         z_1 = self.linear1(z)
         h_d_2= dgl.mean_nodes(g, "h_d")
         h_d_3 = torch.cat([h_d_2, z_1], dim = 1)
-        score = torch.sigmoid(self.linear2(h_d_3))
+        #score = torch.sigmoid(self.linear2(h_d_3))
+        score = self.linear2(h_d_3)
         return score
