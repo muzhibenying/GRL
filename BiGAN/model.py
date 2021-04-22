@@ -12,8 +12,12 @@ class Generator(torch.nn.Module):
         self.node_size = node_size
         self.graph_size = graph_size
 
-        self.gat_layer_update_state_vector = dgl.nn.pytorch.conv.GATConv(
-            self.node_size, self.node_size, num_heads = 3, 
+       # self.gat_layer_update_state_vector = dgl.nn.pytorch.conv.GATConv(
+        #    self.node_size, self.node_size, num_heads = 3, 
+        #    allow_zero_in_degree = True
+        #)
+        self.layer_update_state_vector = dgl.nn.pytorch.GraphConv(
+            self.node_size, self.node_size, weight = True,
             allow_zero_in_degree = True
         )
 
@@ -36,7 +40,8 @@ class Generator(torch.nn.Module):
     """
     def update_state_vector(self, g):
         h = g.ndata["h"]
-        h = torch.mean(self.gat_layer_update_state_vector(g, h), dim = 1)
+        w = g.edata["w"]
+        h = self.layer_update_state_vector(g, h)
         g.ndata["h"] = h
         s = dgl.mean_nodes(g, "h")
         return s
@@ -93,6 +98,8 @@ class Generator(torch.nn.Module):
             self.linear1_add_node(torch.cat([z, self.s], dim = -1))
         ))
         g.ndata["h"] = initial_feature
+        g.add_edges(torch.tensor([0]), torch.tensor([0]))
+        g.edata["w"] = torch.tensor([1.])
         self.s = self.update_state_vector(g)
         while self.add_node(g, z) == 1:
             self.add_edge(g, z)
