@@ -145,7 +145,7 @@ def main():
         plt.savefig("distributions/Distribution of number of edges at Epoch {}.png".format(epoch))
         plt.close()
 
-        """if epoch % 1 == 0:
+        if epoch % 1 == 0:
             x = []
             y = []
             with torch.no_grad():
@@ -172,7 +172,7 @@ def main():
                 ))
             print(np.mean(accuracies), np.std(accuracies))
             with open("results.csv", "a") as f:
-                f.write("{},{},{}\n".format(epoch, np.mean(accuracies), np.std(accuracies)))"""
+                f.write("{},{},{}\n".format(epoch, np.mean(accuracies), np.std(accuracies)))
 
 if __name__ == "__main__":
     main()
