@@ -23,7 +23,7 @@ class Generator(torch.nn.Module):
 
         self.linear1_add_node = torch.nn.Linear(self.node_size * 2, 1)
         self.relu1_add_node = torch.nn.ReLU()
-        self.linear2_add_node = torch.nn.Linear(1, self.node_size)
+        self.linear2_add_node = torch.nn.Linear(self.node_size * 2 + 1, self.node_size)
 
         self.linear1_add_edge = torch.nn.Linear(self.node_size * 4, 1)
         self.relu1_add_edge = torch.nn.ReLU()
@@ -40,7 +40,6 @@ class Generator(torch.nn.Module):
     """
     def update_state_vector(self, g):
         h = g.ndata["h"]
-        w = g.edata["w"]
         h = self.layer_update_state_vector(g, h)
         g.ndata["h"] = h
         s = dgl.mean_nodes(g, "h")
@@ -60,7 +59,10 @@ class Generator(torch.nn.Module):
         if token <= 0 or g.num_nodes() >= self.max_nodes:
             return 0
         else:
-            init_node_feature = self.linear2_add_node(token)
+            print("size of z is {}".format(z.size()))
+            print("size of s is {}".format(self.s.size()))
+            print("size of token is {}".format(token.size()))
+            init_node_feature = self.linear2_add_node(torch.cat([z, self.s, token], dim = -1))
             g.add_nodes(1)
             if "h" in g.ndata.keys():
                 g.ndata["h"][g.num_nodes() - 1] = init_node_feature
@@ -89,13 +91,13 @@ class Generator(torch.nn.Module):
                     g.edata["w"][g.num_edges() - 1] = token
                 else:
                     g.edata["w"] = token
-
+  
     def forward(self, z):
         self.s = z
         g = dgl.DGLGraph()
         g.add_nodes(1)
         initial_feature = self.linear2_add_node(self.relu1_add_node(
-            self.linear1_add_node(torch.cat([z, self.s], dim = -1))
+            torch.cat([z, self.s, self.linear1_add_node(torch.cat([z, self.s], dim = -1))], dim = -1)
         ))
         g.ndata["h"] = initial_feature
         g.add_edges(torch.tensor([0]), torch.tensor([0]))
