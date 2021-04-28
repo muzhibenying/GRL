@@ -12,10 +12,6 @@ class Generator(torch.nn.Module):
         self.node_size = node_size
         self.graph_size = graph_size
 
-       # self.gat_layer_update_state_vector = dgl.nn.pytorch.conv.GATConv(
-        #    self.node_size, self.node_size, num_heads = 3, 
-        #    allow_zero_in_degree = True
-        #)
         self.layer_update_state_vector = dgl.nn.pytorch.GraphConv(
             self.node_size, self.node_size, weight = True,
             allow_zero_in_degree = True
@@ -59,9 +55,6 @@ class Generator(torch.nn.Module):
         if token <= 0 or g.num_nodes() >= self.max_nodes:
             return 0
         else:
-            print("size of z is {}".format(z.size()))
-            print("size of s is {}".format(self.s.size()))
-            print("size of token is {}".format(token.size()))
             init_node_feature = self.linear2_add_node(torch.cat([z, self.s, token], dim = -1))
             g.add_nodes(1)
             if "h" in g.ndata.keys():
@@ -111,52 +104,53 @@ class Generator(torch.nn.Module):
 class Encoder(torch.nn.Module):
     def __init__(self, node_size, hidden_size, out_size, num_layers):
         super(Encoder, self).__init__()
-        self.layers = []
+        self.node_size = node_size
+        self.hidden_size = hidden_size
+        self.out_size = out_size
         self.num_layers = num_layers
-        self.layers.append(dgl.nn.pytorch.conv.GATConv(
-            node_size, hidden_size, num_heads = 3,
-            allow_zero_in_degree = True 
-        ))
-        for __ in range(num_layers - 2):
-            self.layers.append(dgl.nn.pytorch.conv.GATConv(
-                hidden_size, hidden_size, num_heads = 3,
-                allow_zero_in_degree = True
-            ))
-        self.layers.append(dgl.nn.pytorch.conv.GATConv(
-            hidden_size, out_size, num_heads = 3,
-            allow_zero_in_degree = True
-        ))
+        self.layers = []
+        self.layers.append(dgl.nn.pytorch.GraphConv(node_size, hidden_size, weight = True))
+        self.layers.append(torch.nn.ReLU())
+        for __ in range(self.num_layers - 2):
+            self.layers.append(dgl.nn.pytorch.GraphConv(hidden_size, hidden_size, weight = True))
+            self.layers.append(torch.nn.ReLU())
+        self.layers.append(dgl.nn.pytorch.GraphConv(hidden_size, out_size, weight = True))
     
     def forward(self, g, h):
-        h_1 = torch.mean(self.layers[0](g, h), dim = 1)
+        h_1 = self.layers[1](self.layers[0](g, h))
+        for idx in range(self.num_layers - 2):
+            h_1 = self.layers[2 * idx + 3](self.layers[2 * idx + 2](g, h_1))
+        h_1 = self.layers[-1](g, h_1)
         g.ndata["h_1"] = h_1
-        h_1g = dgl.mean_nodes(g, "h_1")
-        for idx in range(self.num_layers - 1):
-            h_1 = torch.mean(self.layers[idx + 1](g, h_1), dim = 1)
-            g.ndata["h_1"] = h_1
-            #h_1g = torch.cat([dgl.mean_nodes(g, "h"), h_1g])
-            h_1g = dgl.mean_nodes(g, "h_1")
-        return h_1g
+        h_g = dgl.mean_nodes(g, "h_1")
+        return h_g
 
 class Discriminator(torch.nn.Module):
     def __init__(self, node_size, hidden_size, out_size):
+        """
+        node_size: the size of the node features
+        hidden_size: the size of the features after GCN layers
+        out_size: the size of the global features
+        """
         super(Discriminator, self).__init__()
         self.node_size = node_size
         self.hidden_size = hidden_size
         self.out_size = out_size
-        self.gat_layer = dgl.nn.pytorch.conv.GATConv(
-            node_size, hidden_size, num_heads = 3,
-            allow_zero_in_degree = True
-        )
+        self.graphLayer1 = dgl.nn.pytorch.GraphConv(node_size, hidden_size, weight = True, allow_zero_in_degree = True)
+        self.activation1 = torch.nn.ReLU()
+        self.graphLayer2 = dgl.nn.pytorch.GraphConv(hidden_size, hidden_size, weight = True, allow_zero_in_degree = True)
+        self.activation2 = torch.nn.ReLU()
         self.linear1 = torch.nn.Linear(self.out_size, self.hidden_size)
         self.linear2 = torch.nn.Linear(self.hidden_size * 2, 1)
-
+    
     def forward(self, g, h, z):
-        h_d = torch.mean(self.gat_layer(g, h), dim = 1)
+        h_d = self.activation1(self.graphLayer1(g, h))
+        h_d = self.activation2(self.graphLayer2(g, h_d))
         g.ndata["h_d"] = h_d
-        z_1 = self.linear1(z)
-        h_d_2= dgl.mean_nodes(g, "h_d")
-        h_d_3 = torch.cat([h_d_2, z_1], dim = 1)
-        #score = torch.sigmoid(self.linear2(h_d_3))
-        score = self.linear2(h_d_3)
+        h_d = dgl.mean_nodes(g, "h_d")
+        z = self.linear1(z)
+        h = torch.cat([h_d, z], dim = 1)
+        score = self.linear2(h)
         return score
+
+

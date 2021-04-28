@@ -11,33 +11,36 @@ import torch
 #import tqdm
 
 def  create_data_loader(opt):
-    dataset = dgl.data.TUDataset(opt.dataset)
+    dataset = dgl.data.GINDataset(opt.dataset, self_loop = True)
     dataset_info = {}
-    dataset_info["num_nodes"] = dataset.max_num_node
+    num_nodes = []
+    for graph, label in dataset:
+        num_nodes.append(graph.num_nodes())
+    dataset_info["num_nodes"] = max(num_nodes)
     data_loader = dgl.dataloading.GraphDataLoader(dataset)
     max_in_degrees = 0
     max_node_labels = 0
     for graph, label in dataset:
-        if "node_attr" not in graph.ndata.keys():
+        if "attr" not in graph.ndata.keys():
             in_degree = max(graph.in_degrees())
-            node_label = max(graph.ndata["node_labels"])
+            node_label = max(graph.ndata["label"])
             if in_degree >= max_in_degrees:
                 max_in_degrees = int(in_degree)
             if node_label >= max_node_labels:
                 max_node_labels = int(node_label)
     for graph, label in dataset:
-        if "node_attr" not in graph.ndata.keys():
+        if "attr" not in graph.ndata.keys():
             graph.ndata["h"] = torch.cat([
                 torch.nn.functional.one_hot(graph.in_degrees(), num_classes = max_in_degrees + 1),
-                torch.nn.functional.one_hot(graph.ndata["node_labels"].type(torch.LongTensor),\
+                torch.nn.functional.one_hot(graph.ndata["label"].type(torch.LongTensor),\
                                                                                     num_classes = max_node_labels + 1)
             ], dim = 1).type(torch.FloatTensor)
         else:
-            graph.ndata["h"] = graph.ndata["node_attr"].type(torch.FloatTensor)
-        if "w" not in graph.edata.keys() and "edge_labels" not in graph.edata.keys():
+            graph.ndata["h"] = graph.ndata["attr"].type(torch.FloatTensor)
+        if "w" not in graph.edata.keys() and "label" not in graph.edata.keys():
             graph.edata["w"] = torch.ones(graph.num_edges())
-        elif "edge_labels" in graph.edata.keys():
-            graph.edata["w"] = graph.edata["edge_labels"]
+        elif "label" in graph.edata.keys():
+            graph.edata["w"] = graph.edata["label"]
     dataset_info["node_feature_size"] = dataset[0][0].ndata["h"].size()[1]
     return data_loader, dataset_info
 
