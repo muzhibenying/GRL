@@ -12,10 +12,16 @@ class Generator(torch.nn.Module):
         self.node_size = node_size
         self.graph_size = graph_size
 
-        self.layer_update_state_vector = dgl.nn.pytorch.GraphConv(
+        self.layer_update_state_vector1 = dgl.nn.pytorch.GraphConv(
             self.node_size, self.node_size, weight = True,
-            allow_zero_in_degree = True
         )
+        self.update_activation1 = torch.nn.ReLU()
+        self.layer_update_state_vector2 = dgl.nn.pytorch.GraphConv(
+            self.node_size, self.node_size, weight = True
+        )
+        self.update_activation2 = torch.nn.ReLU()
+        self.update_edge_weights = torch.nn.Linear(self.node_size * 2 + 1, 1)
+        self.update_activation_edges = torch.nn.ReLU()
 
         self.linear1_add_node = torch.nn.Linear(self.node_size * 2, 1)
         self.relu1_add_node = torch.nn.ReLU()
@@ -25,6 +31,13 @@ class Generator(torch.nn.Module):
         self.relu1_add_edge = torch.nn.ReLU()
 
         self.s = None
+
+    def update_edges(self, edges):
+        print("size of node feature is {}".format(edges.src["h"].size()))
+        print("size of edge feature is {}".format(edges.data["w"].size()))
+        w = self.update_edge_weights(torch.cat([edges.src["h"], edges.dst["h"], edges.data["w"]], dim = -1))
+        w = self.update_activation_edges(w).squeeze(0)
+        return {"w": w}
 
     """
     After a node or edge is generated, the state vector for the generated
@@ -36,7 +49,13 @@ class Generator(torch.nn.Module):
     """
     def update_state_vector(self, g):
         h = g.ndata["h"]
-        h = self.layer_update_state_vector(g, h)
+        h = self.layer_update_state_vector1(g, h)
+        h = self.update_activation1(h)
+        g.ndata["h"] = h
+        print("size of the edge features of the graph is {}".format(g.edata["w"]))
+        g.apply_edges(self.update_edges)
+        h = self.layer_update_state_vector2(g, h)
+        h = self.update_activation2(h)
         g.ndata["h"] = h
         s = dgl.mean_nodes(g, "h")
         return s
@@ -71,7 +90,7 @@ class Generator(torch.nn.Module):
     * If token = 0, the edge will not be added
     * If token > 0, the token will be the weight of the edge  
     """
-    def add_edge(self, g, z):
+    """def add_edge(self, g, z):
         for i in range(g.num_nodes()):
             token = self.relu1_add_edge(self.linear1_add_edge(
                 torch.cat([z, self.s, g.ndata["h"][g.num_nodes() - 1].unsqueeze(0), g.ndata["h"][i].unsqueeze(0)],
@@ -83,7 +102,20 @@ class Generator(torch.nn.Module):
                 if "w" in g.edata.keys():
                     g.edata["w"][g.num_edges() - 1] = token
                 else:
-                    g.edata["w"] = token
+                    g.edata["w"] = token"""
+    def add_edge(self, g, z):
+        for i in range(g.num_nodes()):
+            token = self.relu1_add_edge(self.linear1_add_edge(
+                torch.cat([z, self.s, g.ndata["h"][g.num_nodes() - 1].unsqueeze(0), g.ndata["h"][i].unsqueeze(0)],
+            dim = -1
+            )))
+            g.add_edges(torch.tensor([g.num_nodes() - 1]), torch.tensor([i]))
+            if "w" in g.edata.keys():
+                g.edata["w"][g.num_edges() - 1] = token
+                print("size of token is {}".format(token.size()))
+            else:
+                g.edata["w"] = token
+                print("size of token is {}".format(token.unsqueeze(0).size()))
   
     def forward(self, z):
         self.s = z
@@ -94,7 +126,7 @@ class Generator(torch.nn.Module):
         ))
         g.ndata["h"] = initial_feature
         g.add_edges(torch.tensor([0]), torch.tensor([0]))
-        g.edata["w"] = torch.tensor([1.])
+        g.edata["w"] = torch.tensor([[1.]])
         self.s = self.update_state_vector(g)
         while self.add_node(g, z) == 1:
             self.add_edge(g, z)
@@ -103,6 +135,12 @@ class Generator(torch.nn.Module):
 
 class Encoder(torch.nn.Module):
     def __init__(self, node_size, hidden_size, out_size, num_layers):
+        """
+        node_size: the size of the node features
+        hidden_size: the size of node features after GCN
+        out_size: the size of the global feature
+        num_layers: the number of GCN layers used in the encoder
+        """
         super(Encoder, self).__init__()
         self.node_size = node_size
         self.hidden_size = hidden_size
